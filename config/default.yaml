@@ -1,0 +1,48 @@
+# Android 触摸录制回放框架 - 默认配置
+
+# 设备配置
+device:
+  serial: null          # 设备序列号，null 表示自动检测
+  touch_device: null    # 触摸设备路径，null 表示自动检测
+
+# 录制配置
+recording:
+  mode: realtime        # 录制模式: realtime（实时生成）或 batch（批量生成）
+  output: ./scripts     # 默认输出目录
+  format: hybrid       # 脚本格式: adb、u2 或 hybrid
+  adb_path: adb       # adb 命令路径
+
+# 手势识别配置
+gesture:
+  # 点击识别阈值
+  tap_threshold: 10.0          # 点击最大移动距离（像素）
+  tap_duration: 0.3            # 点击最大持续时间（秒）
+
+  # 长按识别阈值
+  long_press_duration: 0.5     # 长按最小持续时间（秒）
+
+  # 滑动识别阈值
+  swipe_threshold: 50.0       # 滑动最小距离（像素）
+
+# 生成器配置
+generator:
+  adb:
+    delay_enabled: true        # 是否启用延迟保持
+  u2:
+    delay_enabled: true        # 是否启用延迟保持
+  hybrid:
+    delay_enabled: true        # 是否启用延迟保持
+    swipe_threshold: 100.0     # 使用 u2 的滑动距离阈值（像素）
+    long_press_threshold: 1.0  # 使用 u2 的长按时长阈值（秒）
+
+# 回放配置
+replay:
+  backend: auto         # 回放后端: auto、adb 或 u2
+  speed: 1.0            # 回放速度倍率
+  adb_path: adb       # adb 命令路径
+
+# 日志配置
+logging:
+  level: INFO          # 日志级别: DEBUG、INFO、WARNING、ERROR
+  file: null          # 日志文件路径，null 表示不输出到文件
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
