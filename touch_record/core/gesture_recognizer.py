@@ -5,7 +5,6 @@
 """
 
 import math
-from datetime import datetime
 from typing import List, Optional, Tuple
 
 from .event_types import TouchDown, TouchEvent, TouchMove, TouchUp
@@ -40,113 +39,7 @@ class GestureRecognizer:
         self.long_press_duration = long_press_duration
         self.swipe_threshold = swipe_threshold
 
-        self._events: List[TouchEvent] = []
-        self._gestures: List[Gesture] = []
-        self._last_gesture_end_time: float = 0.0
-
-    def add_event(self, event: TouchEvent) -> Optional[Gesture]:
-        """
-        添加一个触摸事件并尝试识别手势
-
-        Args:
-            event: 触摸事件
-
-        Returns:
-            如果识别到完整手势则返回，否则返回 None
-        """
-        self._events.append(event)
-
-        if isinstance(event, TouchDown):
-            return self._on_down(event)
-
-        elif isinstance(event, TouchUp):
-            return self._on_up(event)
-
-        elif isinstance(event, TouchMove):
-            return self._on_move(event)
-
-        return None
-
-    def _on_down(self, event: TouchDown) -> Optional[Gesture]:
-        """处理触摸按下事件"""
-        # Down 事件不产生手势，只是开始追踪
-        return None
-
-    def _on_up(self, event: TouchUp) -> Optional[Gesture]:
-        """处理触摸抬起事件"""
-        # 查找对应的 Down 事件
-        down_event = self._find_last_down()
-        if down_event is None:
-            return None
-
-        # 计算距离和持续时间
-        distance = self._calculate_distance(down_event, event)
-        duration = event.timestamp - down_event.timestamp
-
-        # 计算延迟
-        delay = event.timestamp - self._last_gesture_end_time
-        self._last_gesture_end_time = event.timestamp
-
-        # 识别手势
-        if distance < self.tap_threshold:
-            # 移动距离小，可能是点击或长按
-            if duration < self.long_press_duration:
-                gesture = Tap(
-                    start_time=down_event.timestamp,
-                    end_time=event.timestamp,
-                    duration=duration,
-                    x=event.x,
-                    y=event.y,
-                )
-            else:
-                gesture = LongPress(
-                    start_time=down_event.timestamp,
-                    end_time=event.timestamp,
-                    duration=duration,
-                    x=event.x,
-                    y=event.y,
-                )
-        else:
-            # 移动距离大，是滑动
-            gesture = Swipe(
-                start_time=down_event.timestamp,
-                end_time=event.timestamp,
-                duration=duration,
-                start_x=down_event.x,
-                start_y=down_event.y,
-                end_x=event.x,
-                end_y=event.y,
-            )
-
-        # 设置延迟
-        gesture.delay_before = delay
-        self._gestures.append(gesture)
-        return gesture
-
-    def _on_move(self, event: TouchMove) -> Optional[Gesture]:
-        """
-        处理触摸移动事件
-
-        目前只记录事件，实际手势识别在 Up 时完成
-        """
-        return None
-
-    def _find_last_down(self) -> Optional[TouchDown]:
-        """查找最后一个 Down 事件"""
-        for event in reversed(self._events):
-            if isinstance(event, TouchDown):
-                return event
-        return None
-
-    def _calculate_distance(
-        self, event1: TouchEvent, event2: TouchEvent
-    ) -> float:
-        """计算两个事件之间的距离"""
-        dx = event1.x - event2.x
-        dy = event1.y - event2.y
-        return math.sqrt(dx * dx + dy * dy)
-
-    def recognize_all(self, events: List[TouchEvent]) -> List[Gesture]:
+    def recognize_from_events(self, events: List[TouchEvent]) -> List[Gesture]:
         """
         从事件列表中识别所有手势
 
@@ -156,142 +49,13 @@ class GestureRecognizer:
         Returns:
             识别出的手势列表
         """
-        gestures = []
-        for event in events:
-            gesture = self.add_event(event)
-            if gesture:
-                gestures.append(gesture)
-        return gestures
-
-    def get_gestures(self) -> List[Gesture]:
-        """获取已识别的所有手势"""
-        return self._gestures.copy()
-
-    def reset(self):
-        """重置识别器状态"""
-        self._events.clear()
-        self._gestures.clear()
-        self._last_gesture_end_time = 0.0
-
-
-class RealtimeGestureRecognizer(GestureRecognizer):
-    """
-    实时手势识别器
-
-    在接收到事件时立即识别手势，适用于实时录制场景
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._current_down: Optional[TouchDown] = None
-        self._move_count: int = 0
-        self._is_swiping: bool = False
-
-    def add_event(self, event: TouchEvent) -> Optional[Gesture]:
-        """添加事件并实时识别"""
-        if isinstance(event, TouchDown):
-            return self._handle_down(event)
-        elif isinstance(event, TouchMove):
-            return self._handle_move(event)
-        elif isinstance(event, TouchUp):
-            return self._handle_up(event)
-        return None
-
-    def _handle_down(self, event: TouchDown) -> Optional[Gesture]:
-        """处理按下事件"""
-        self._current_down = event
-        self._move_count = 0
-        self._is_swiping = False
-        return None
-
-    def _handle_move(self, event: TouchMove) -> Optional[Gesture]:
-        """处理移动事件"""
-        if self._current_down is None:
-            return None
-
-        self._move_count += 1
-
-        # 检测是否开始滑动
-        if not self._is_swiping and self._move_count >= 3:
-            distance = self._calculate_distance(self._current_down, event)
-            if distance >= self.swipe_threshold:
-                self._is_swiping = True
-
-        return None
-
-    def _handle_up(self, event: TouchUp) -> Optional[Gesture]:
-        """处理抬起事件"""
-        if self._current_down is None:
-            return None
-
-        down = self._current_down
-        distance = self._calculate_distance(down, event)
-        duration = event.timestamp - down.timestamp
-
-        # 计算延迟
-        delay = event.timestamp - self._last_gesture_end_time
-        self._last_gesture_end_time = event.timestamp
-
-        if distance < self.tap_threshold:
-            if duration < self.long_press_duration:
-                gesture = Tap(
-                    start_time=down.timestamp,
-                    end_time=event.timestamp,
-                    duration=duration,
-                    x=event.x,
-                    y=event.y,
-                )
-            else:
-                gesture = LongPress(
-                    start_time=down.timestamp,
-                    end_time=event.timestamp,
-                    duration=duration,
-                    x=event.x,
-                    y=event.y,
-                )
-        else:
-            gesture = Swipe(
-                start_time=down.timestamp,
-                end_time=event.timestamp,
-                duration=duration,
-                start_x=down.x,
-                start_y=down.y,
-                end_x=event.x,
-                end_y=event.y,
-            )
-
-        gesture.delay_before = delay
-
-        # 重置状态
-        self._current_down = None
-        self._move_count = 0
-        self._is_swiping = False
-
-        self._gestures.append(gesture)
-        return gesture
-
-
-class BatchGestureRecognizer(GestureRecognizer):
-    """
-    批量手势识别器
-
-    收集所有事件后统一识别，适用于批量录制场景
-    """
-
-    def recognize_from_events(self, events: List[TouchEvent]) -> List[Gesture]:
-        """
-        从事件列表中识别手势
-
-        使用基于窗口的方法，更准确地识别复杂手势序列
-        """
-        self.reset()
-        gestures = []
-
         # 按时间排序事件
         sorted_events = sorted(events, key=lambda e: e.timestamp)
 
+        gestures = []
         i = 0
-        last_timestamp = 0.0
+        # 初始化 last_timestamp 为第一个事件的时间戳，避免第一个手势的 delay 过大
+        last_timestamp = sorted_events[0].timestamp if sorted_events else 0.0
 
         while i < len(sorted_events):
             event = sorted_events[i]
@@ -312,7 +76,6 @@ class BatchGestureRecognizer(GestureRecognizer):
 
             i += 1
 
-        self._gestures = gestures
         return gestures
 
     def _extract_touch_sequence(
@@ -349,9 +112,9 @@ class BatchGestureRecognizer(GestureRecognizer):
                 return down, moves, event
             elif isinstance(event, TouchMove):
                 moves.append(event)
-                else:
-                    # 遇到新的 Down，序列结束
-                    break
+            else:
+                # 遇到新的 Down，序列结束
+                break
 
             i += 1
 
@@ -420,10 +183,17 @@ class BatchGestureRecognizer(GestureRecognizer):
         gesture.delay_before = delay
         return gesture
 
+    def _calculate_distance(
+        self, event1: TouchEvent, event2: TouchEvent
+    ) -> float:
+        """计算两个事件之间的距离"""
+        dx = event1.x - event2.x
+        dy = event1.y - event2.y
+        return math.sqrt(dx * dx + dy * dy)
+
 
 def recognize_gestures(
     events: List[TouchEvent],
-    realtime: bool = False,
     **kwargs,
 ) -> List[Gesture]:
     """
@@ -431,16 +201,10 @@ def recognize_gestures(
 
     Args:
         events: 触摸事件列表
-        realtime: 是否使用实时识别模式
         **kwargs: 传递给识别器的参数
 
     Returns:
         识别出的手势列表
     """
-    if realtime:
-        recognizer = RealtimeGestureRecognizer(**kwargs)
-    else:
-        recognizer = BatchGestureRecognizer(**kwargs)
-        return recognizer.recognize_from_events(events)
-
-    return recognizer.recognize_all(events)
+    recognizer = GestureRecognizer(**kwargs)
+    return recognizer.recognize_from_events(events)

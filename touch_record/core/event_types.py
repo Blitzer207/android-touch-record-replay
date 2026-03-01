@@ -8,6 +8,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from .constants import (
+    EV_ABS,
+    EV_KEY,
+    EV_SYN,
+    ABS_MT_POSITION_X,
+    ABS_MT_POSITION_Y,
+    ABS_MT_TRACKING_ID,
+)
+
 
 @dataclass
 class TouchEvent:
@@ -78,28 +87,27 @@ class RawEvent:
 
     def is_touch_event(self) -> bool:
         """判断是否为触摸相关事件"""
-        # 触摸事件类型码: EV_ABS = 3, EV_KEY = 1
-        return self.type_code in (1, 3)
+        return self.type_code in (EV_KEY, EV_ABS)
 
     def is_x_position(self) -> bool:
-        """判断是否为 X 坐标事件 (ABS_MT_POSITION_X = 0x35 = 53)"""
-        return self.type_code == 3 and self.code == 0x35
+        """判断是否为 X 坐标事件"""
+        return self.type_code == EV_ABS and self.code == ABS_MT_POSITION_X
 
     def is_y_position(self) -> bool:
-        """判断是否为 Y 坐标事件 (ABS_MT_POSITION_Y = 0x36 = 54)"""
-        return self.type_code == 3 and self.code == 0x36
+        """判断是否为 Y 坐标事件"""
+        return self.type_code == EV_ABS and self.code == ABS_MT_POSITION_Y
 
     def is_tracking_id(self) -> bool:
-        """判断是否为追踪 ID 事件 (ABS_MT_TRACKING_ID = 0x39 = 57)"""
-        return self.type_code == 3 and self.code == 0x39
+        """判断是否为追踪 ID 事件"""
+        return self.type_code == EV_ABS and self.code == ABS_MT_TRACKING_ID
 
     def is_pressure(self) -> bool:
         """判断是否为压力事件 (ABS_MT_PRESSURE = 0x3a = 58)"""
-        return self.type_code == 3 and self.code == 0x3A
+        return self.type_code == EV_ABS and self.code == 0x3A
 
     def is_syn_report(self) -> bool:
-        """判断是否为同步报告事件 (EV_SYN = 0)"""
-        return self.type_code == 0
+        """判断是否为同步报告事件"""
+        return self.type_code == EV_SYN
 
     def __repr__(self) -> str:
         return (

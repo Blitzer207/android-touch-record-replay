@@ -6,7 +6,7 @@
 
 import re
 from datetime import datetime
-from typing import Dict, Generator, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from .device_info import DeviceInfo
 from .event_types import (
@@ -39,7 +39,6 @@ class EventParser:
         self._current_device: Optional[str] = None
         self._current_x: int = 0
         self._current_y: int = 0
-        self._current_pressure: float = 0.0
         self._current_tracking_id: Optional[int] = None
         self._touch_down: bool = False
 
@@ -69,62 +68,28 @@ class EventParser:
             type_code=type_code,
             code=code,
             value=value,
-            timestamp=datetime.now().timestamp(),
+            timestamp=0,  # 会在处理时生成
         )
 
-    def parse_block(
-        self, lines: List[str]
-    ) -> Generator[TouchEvent, None, None]:
+    def parse_lines(self, lines: List[str]) -> List[TouchEvent]:
         """
-        解析一个事件块（一组相关的原始事件）
-
-        一个事件块以 SYN_REPORT (0000 0000) 结束
+        解析多行 getevent 输出
 
         Args:
-            lines: 事件行列表
+            lines: getevent 输出行列表
 
-        Yields:
-            结构化的触摸事件
+        Returns:
+            解析出的触摸事件列表
         """
-        self._reset_state()
-
+        events = []
         for line in lines:
             raw = self.parse_line(line)
             if raw is None:
                 continue
+            events.extend(list(self._process_raw_event(raw)))
+        return events
 
-            yield from self._process_raw_event(raw)
-
-    def parse_stream(
-        self, line_stream: Generator[str, None, None]
-    ) -> Generator[TouchEvent, None, None]:
-        """
-        解析事件流
-
-        自动识别事件块边界（SYN_REPORT）
-
-        Args:
-            line_stream: 事件行生成器
-
-        Yields:
-            结构化的触摸事件
-        """
-        block: List[str] = []
-
-        for line in line_stream:
-            block.append(line)
-
-            # 检测 SYN_REPORT
-            if "0000 0000" in line:
-                if block:
-                    yield from self.parse_block(block)
-                    block.clear()
-
-        # 处理剩余的事件
-        if block:
-            yield from self.parse_block(block)
-
-    def _process_raw_event(self, raw: RawEvent) -> Generator[TouchEvent, None, None]:
+    def _process_raw_event(self, raw: RawEvent):
         """处理单个原始事件，生成触摸事件"""
         if not raw.is_touch_event():
             return
@@ -136,14 +101,11 @@ class EventParser:
         elif raw.is_y_position():
             self._current_y = raw.value
 
-        elif raw.is_pressure():
-            self._current_pressure = raw.value / 255.0  # 归一化压力值
-
         elif raw.is_tracking_id():
             # tracking_id == -1 (0xffffffff) 表示触摸抬起
             if raw.value == 0xFFFFFFFF:
                 if self._touch_down:
-                    yield self._create_touch_up(raw.timestamp)
+                    yield self._create_touch_up(datetime.now().timestamp())
             else:
                 self._current_tracking_id = raw.value
 
@@ -151,14 +113,14 @@ class EventParser:
         elif raw.type_code == 1 and raw.code == 0x014A:  # BTN_TOUCH
             if raw.value == 1:  # 按下
                 if not self._touch_down:
-                    yield self._create_touch_down(raw.timestamp)
+                    yield self._create_touch_down(datetime.now().timestamp())
             elif raw.value == 0:  # 抬起
                 if self._touch_down:
-                    yield self._create_touch_up(raw.timestamp)
+                    yield self._create_touch_up(datetime.now().timestamp())
 
         # 生成移动事件
         elif self._touch_down:
-            yield self._create_touch_move(raw.timestamp)
+            yield self._create_touch_move(datetime.now().timestamp())
 
     def _create_touch_down(self, timestamp: float) -> TouchDown:
         """创建触摸按下事件"""
@@ -172,7 +134,6 @@ class EventParser:
             device=self._current_device or "",
             x=x,
             y=y,
-            pressure=self._current_pressure,
             tracking_id=self._current_tracking_id,
         )
 
@@ -205,7 +166,6 @@ class EventParser:
             device=self._current_device or "",
             x=x,
             y=y,
-            pressure=self._current_pressure,
             tracking_id=self._current_tracking_id,
         )
 
@@ -216,77 +176,13 @@ class EventParser:
             return self.device_info.convert_coordinates(x, y, device)
         return float(x), float(y)
 
-    def _reset_state(self):
+    def reset(self):
         """重置解析状态"""
         self._current_device = None
         self._current_x = 0
         self._current_y = 0
-        self._current_pressure = 0.0
         self._current_tracking_id = None
         self._touch_down = False
-
-
-class TouchEventStream:
-    """
-    触摸事件流
-
-    从监听器获取原始事件，解析并输出结构化的触摸事件
-    """
-
-    def __init__(
-        self,
-        device_info: Optional[DeviceInfo] = None,
-        parser: Optional[EventParser] = None,
-    ):
-        self.parser = parser or EventParser(device_info)
-        self._touch_events: List[TouchEvent] = []
-        self._last_timestamp: Optional[float] = None
-
-    def feed_line(self, line: str) -> List[TouchEvent]:
-        """
-        喂入一行原始事件
-
-        Args:
-            line: getevent 输出行
-
-        Returns:
-            生成的触摸事件列表
-        """
-        events = []
-
-        raw = self.parser.parse_line(line)
-        if raw is None:
-            return events
-
-        for event in self.parser._process_raw_event(raw):
-            events.append(event)
-            self._touch_events.append(event)
-
-        return events
-
-    def feed_lines(self, lines: List[str]) -> List[TouchEvent]:
-        """
-        喂入多行原始事件
-
-        Args:
-            lines: getevent 输出行列表
-
-        Returns:
-            生成的触摸事件列表
-        """
-        all_events = []
-        for line in lines:
-            all_events.extend(self.feed_line(line))
-        return all_events
-
-    def get_events(self) -> List[TouchEvent]:
-        """获取所有已解析的触摸事件"""
-        return self._touch_events.copy()
-
-    def clear(self):
-        """清空已缓存的事件"""
-        self._touch_events.clear()
-        self.parser._reset_state()
 
 
 def parse_event_lines(
@@ -303,10 +199,4 @@ def parse_event_lines(
         触摸事件列表
     """
     parser = EventParser(device_info)
-    events = []
-    for line in lines:
-        raw = parser.parse_line(line)
-        if raw:
-            for event in parser._process_raw_event(raw):
-                events.append(event)
-    return events
+    return parser.parse_lines(lines)

@@ -8,16 +8,19 @@ import subprocess
 import time
 from typing import List
 
-from .base_replayer import BaseReplayer
 from ..core.gesture_types import Gesture, LongPress, Swipe, Tap
 
 
-class AdbReplayer(BaseReplayer):
+class AdbReplayer:
     """
     ADB 回放器
 
     使用 adb shell input 命令执行手势操作
     """
+
+    def __init__(self, speed: float = 1.0, adb_path: str = "adb"):
+        self.speed = speed
+        self.adb_path = adb_path
 
     def replay(self, gestures: List[Gesture]):
         """回放手势"""
@@ -30,7 +33,16 @@ class AdbReplayer(BaseReplayer):
 
         直接执行脚本文件
         """
-        subprocess.run(["python3", filename], check=True)
+        try:
+            subprocess.run(["python3", filename], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"错误: 回放文件失败 - {filename}, 返回码: {e.returncode}")
+        except FileNotFoundError:
+            print(f"错误: 找不到文件 - {filename}")
+
+    def adjust_delay(self, delay: float) -> float:
+        """根据速度调整延迟"""
+        return delay / self.speed
 
     def _replay_gesture(self, gesture: Gesture):
         """回放单个手势"""
@@ -49,7 +61,10 @@ class AdbReplayer(BaseReplayer):
 
         # 应用延迟
         time.sleep(self.adjust_delay(gesture.delay_before))
-        subprocess.run(cmd, shell=True, check=True)
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"错误: 点击手势执行失败 - 位置({x}, {y}), 返回码: {e.returncode}")
 
     def _replay_swipe(self, gesture: Swipe):
         """回放滑动"""
@@ -65,7 +80,10 @@ class AdbReplayer(BaseReplayer):
         cmd = f"{self.adb_path} shell input swipe {x1} {y1} {x2} {y2} {duration_ms}"
 
         time.sleep(self.adjust_delay(gesture.delay_before))
-        subprocess.run(cmd, shell=True, check=True)
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"错误: 滑动手势执行失败 - 起点({x1}, {y1}) -> 终点({x2}, {y2}), 时长{duration_ms}ms, 返回码: {e.returncode}")
 
     def _replay_longpress(self, gesture: LongPress):
         """回放长按"""
@@ -80,7 +98,10 @@ class AdbReplayer(BaseReplayer):
         cmd = f"{self.adb_path} shell input swipe {x} {y} {x} {y} {duration_ms}"
 
         time.sleep(self.adjust_delay(gesture.delay_before))
-        subprocess.run(cmd, shell=True, check=True)
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"错误: 长按手势执行失败 - 位置({x}, {y}), 时长{duration_ms}ms, 返回码: {e.returncode}")
 
 
 def replay_with_adb(

@@ -1,15 +1,15 @@
 """
 事件监听器
 
-监听 Android 设备的 getevent 输出，实时捕获原始触摸事件。
+监听 Android 设备的 getevent 输出，捕获原始触摸事件。
 """
 
+import queue
+import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
-from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Callable, Generator, List, Optional
+from typing import Generator, List, Optional
 
 from .device_info import DeviceInfo, DeviceInfoCollector
 
@@ -20,8 +20,11 @@ class ListenerConfig:
 
     adb_path: str = "adb"
     device_path: Optional[str] = None  # 监听特定设备，None 表示自动检测
-    filter_touch_only: bool = True  # 只监听触摸事件
     buffer_size: int = 1000  # 事件队列缓冲大小
+
+
+# SYN_REPORT 检测正则：匹配 "0000 0000" 前后有空格或在行尾
+SYN_REPORT_PATTERN = re.compile(r'\s0000\s+0000(?:\s|$)')
 
 
 class EventListener:
@@ -29,7 +32,7 @@ class EventListener:
 
     def __init__(self, config: Optional[ListenerConfig] = None):
         self.config = config or ListenerConfig()
-        self._queue: Queue[str] = Queue(self.config.buffer_size)
+        self._queue: queue.Queue[str] = queue.Queue(self.config.buffer_size)
         self._stop_event = Event()
         self._thread: Optional[Thread] = None
         self._device_info: Optional[DeviceInfo] = None
@@ -67,10 +70,8 @@ class EventListener:
         if self.config.device_path:
             return self.config.device_path
 
-        if self.config.filter_touch_only and self._device_info:
-            touch_device = self._device_info.touch_device
-            if touch_device:
-                return touch_device.path
+        if self._device_info and self._device_info.touch_device:
+            return self._device_info.touch_device.path
 
         # 监听所有设备
         return ""
@@ -88,16 +89,16 @@ class EventListener:
 
     def _listen(self, command: str):
         """监听事件（在独立线程中运行）"""
-        try:
-            process = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,  # 行缓冲
-            )
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # 行缓冲
+        )
 
+        try:
             while not self._stop_event.is_set():
                 line = process.stdout.readline()
                 if not line:
@@ -107,20 +108,18 @@ class EventListener:
                 if line:
                     try:
                         self._queue.put_nowait(line)
-                    except:
+                    except queue.Full:
                         # 队列满，丢弃旧事件
                         try:
                             self._queue.get_nowait()
                             self._queue.put_nowait(line)
-                        except:
+                        except (queue.Empty, queue.Full):
                             pass
-
-        except Exception as e:
-            # 忽略异常，正常停止时会有错误
+        except OSError:
             pass
         finally:
-            if hasattr(process, "terminate"):
-                process.terminate()
+            process.terminate()
+            process.wait()
 
     def read_line(self, timeout: float = 0.1) -> Optional[str]:
         """
@@ -134,7 +133,7 @@ class EventListener:
         """
         try:
             return self._queue.get(timeout=timeout)
-        except Empty:
+        except queue.Empty:
             return None
 
     def lines(self, timeout: float = 0.1) -> Generator[str, None, None]:
@@ -167,61 +166,16 @@ class EventListener:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.stop()
 
 
-class CallbackEventListener(EventListener):
-    """支持回调的事件监听器"""
-
-    def __init__(
-        self,
-        config: Optional[ListenerConfig] = None,
-        on_event: Optional[Callable[[str], None]] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
-    ):
-        super().__init__(config)
-        self._on_event = on_event
-        self._on_error = on_error
-        self._callback_thread: Optional[Thread] = None
-
-    def start(self):
-        """启动监听"""
-        super().start()
-        self._stop_event.clear()
-        self._callback_thread = Thread(target=self._callback_loop, daemon=True)
-        self._callback_thread.start()
-
-    def stop(self):
-        """停止监听"""
-        self._stop_event.set()
-        if self._callback_thread:
-            self._callback_thread.join(timeout=2)
-            self._callback_thread = None
-        super().stop()
-
-    def _callback_loop(self):
-        """回调循环"""
-        try:
-            for line in self.lines():
-                if self._on_event:
-                    try:
-                        self._on_event(line)
-                    except Exception as e:
-                        if self._on_error:
-                            self._on_error(e)
-        except Exception as e:
-            if self._on_error:
-                self._on_error(e)
-
-
 class BufferedEventListener(EventListener):
-    """缓冲事件监听器，按批次读取事件"""
+    """缓冲事件监听器，收集所有事件"""
 
     def __init__(self, config: Optional[ListenerConfig] = None):
         super().__init__(config)
         self._buffer: List[str] = []
-        self._last_flush_time = datetime.now().timestamp()
 
     def flush(self) -> List[str]:
         """刷新并返回所有缓冲的事件"""
@@ -229,7 +183,7 @@ class BufferedEventListener(EventListener):
         self._buffer.clear()
         return events
 
-    def lines(self, timeout: float = 0.1) -> Generator[List[str], None, None]:
+    def collect_lines(self, timeout: float = 0.1) -> Generator[List[str], None, None]:
         """
         生成器：持续读取事件批次
 
@@ -247,29 +201,6 @@ class BufferedEventListener(EventListener):
             self._buffer.append(line)
 
             # 遇到 SYN_REPORT 时返回批次
-            if "0000 0000" in line:
+            if SYN_REPORT_PATTERN.search(line):
                 if self._buffer:
                     yield self.flush()
-
-
-def listen_events(
-    config: Optional[ListenerConfig] = None,
-    callback: Optional[Callable[[str], None]] = None,
-) -> EventListener:
-    """
-    便捷函数：创建并启动事件监听器
-
-    Args:
-        config: 监听器配置
-        callback: 事件回调函数
-
-    Returns:
-        事件监听器
-    """
-    if callback:
-        listener = CallbackEventListener(config, on_event=callback)
-    else:
-        listener = EventListener(config)
-
-    listener.start()
-    return listener

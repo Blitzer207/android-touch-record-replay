@@ -9,6 +9,15 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from .constants import (
+    EV_ABS,
+    EV_KEY,
+    ABS_MT_POSITION_X,
+    ABS_MT_POSITION_Y,
+    ABS_X,
+    ABS_Y,
+)
+
 
 @dataclass
 class InputDevice:
@@ -131,9 +140,27 @@ class DeviceInfoCollector:
         """解析输入设备信息"""
         output = self._run_adb_command("getevent -p")
 
-        device_blocks = output.split("\n\n")
-        for block in device_blocks:
-            if not block.strip():
+        # 使用 "add device" 作为分隔符
+        # 这对模拟器和真机都适用
+        blocks = []
+        current_block = []
+
+        for line in output.split("\n"):
+            if line.startswith("add device"):
+                # 新设备开始
+                if current_block:
+                    blocks.append("\n".join(current_block))
+                current_block = [line]
+            else:
+                current_block.append(line)
+
+        # 添加最后一个块
+        if current_block:
+            blocks.append("\n".join(current_block))
+
+        # 解析每个设备块
+        for block in blocks:
+            if not block:
                 continue
 
             device = self._parse_device_block(block)
@@ -153,11 +180,26 @@ class DeviceInfoCollector:
         device = InputDevice()
 
         # 第一行：设备路径和名称
+        # 支持两种格式：
+        # 格式1: /dev/input/event0:  name:     "xxx"
+        # 格式2: add device 1: /dev/input/event0
         first_line = lines[0]
-        match = re.search(r"^(/dev/input/event\d+):\s*(.+?)(?:\s|$)", first_line)
+
+        # 尝试格式2 (模拟器使用此格式)
+        match = re.search(r"add device \d+:\s*(/dev/input/event\d+)", first_line)
         if match:
             device.path = match.group(1)
-            device.name = match.group(2)
+            # 名称在下一行
+            if len(lines) > 1:
+                name_match = re.search(r'name:\s*"([^"]*)"', lines[1])
+                if name_match:
+                    device.name = name_match.group(1)
+        else:
+            # 尝试格式1 (真机使用此格式)
+            match = re.search(r"^(/dev/input/event\d+):\s*(.+?)(?:\s|$)", first_line)
+            if match:
+                device.path = match.group(1)
+                device.name = match.group(2)
 
         # 解析能力
         for line in lines[1:]:
@@ -167,25 +209,30 @@ class DeviceInfoCollector:
             if self._is_touch_capability(line):
                 device.is_touch = True
 
-            # 提取 X 轴最大值
-            x_match = re.search(rf"ABS_MT_POSITION_X\s*:\s*value 0, min 0, max (\d+)", line)
+            # 提取 X 轴最大值（支持名称和十六进制代码）
+            # 名称格式: ABS_MT_POSITION_X : value 0, min 0, max 65535
+            # 十六进制格式: 0000  : value 0, min 0, max 32767
+            # 注意：需要非贪婪匹配十六进制代码后的数字
+            x_match = re.search(r"(?:ABS_MT_POSITION_X|0000)\s*:\s*value \d+, min \d+, max (\d+)", line)
             if x_match:
                 device.max_x = int(x_match.group(1))
 
             # 备选：ABS_X
             if device.max_x == 0:
-                x_match = re.search(rf"ABS_X\s*:\s*value 0, min 0, max (\d+)", line)
+                x_match = re.search(r"ABS_X\s*:\s*value \d+, min \d+, max (\d+)", line)
                 if x_match:
                     device.max_x = int(x_match.group(1))
 
             # 提取 Y 轴最大值
-            y_match = re.search(rf"ABS_MT_POSITION_Y\s*:\s*value 0, min 0, max (\d+)", line)
+            # 名称格式: ABS_MT_POSITION_Y : value 0, min 0, max 65535
+            # 十六进制格式: 0001  : value 0, min 0, max 32767
+            y_match = re.search(r"(?:ABS_MT_POSITION_Y|0001)\s*:\s*value \d+, min \d+, max (\d+)", line)
             if y_match:
                 device.max_y = int(y_match.group(1))
 
             # 备选：ABS_Y
             if device.max_y == 0:
-                y_match = re.search(rf"ABS_Y\s*:\s*value 0, min 0, max (\d+)", line)
+                y_match = re.search(r"ABS_Y\s*:\s*value \d+, min \d+, max (\d+)", line)
                 if y_match:
                     device.max_y = int(y_match.group(1))
 
